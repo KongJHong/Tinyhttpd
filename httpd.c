@@ -1,3 +1,12 @@
+/*
+ * @Descripttion: 做了一些注释，99年的时候应该是没有HTTP1.1的，所以它对传入字符串的处理没有HTTP相关的
+ * @version: 
+ * @Author: KongJHong
+ * @Date: 2019-08-11 19:57:28
+ * @LastEditors: KongJHong
+ * @LastEditTime: 2019-08-11 19:59:24
+ */
+
 /* J. David's webserver */
 /* This is a simple webserver.
  * Created November 1999 by J. David Blackstone.
@@ -27,12 +36,14 @@
 #include <stdlib.h>
 #include <stdint.h>
 
+
 #define ISspace(x) isspace((int)(x))
 
 #define SERVER_STRING "Server: jdbhttpd/0.1.0\r\n"
 #define STDIN   0
 #define STDOUT  1
 #define STDERR  2
+#define u_short unsigned short
 
 void accept_request(void *);
 void bad_request(int);
@@ -66,16 +77,19 @@ void accept_request(void *arg)
                        * program */
     char *query_string = NULL;
 
+    //获取首行
     numchars = get_line(client, buf, sizeof(buf));
     i = 0; j = 0;
     while (!ISspace(buf[i]) && (i < sizeof(method) - 1))
     {
+        //获取请求方法
         method[i] = buf[i];
         i++;
     }
     j=i;
     method[i] = '\0';
 
+    //这个判断是不是有点多余
     if (strcasecmp(method, "GET") && strcasecmp(method, "POST"))
     {
         unimplemented(client);
@@ -96,27 +110,29 @@ void accept_request(void *arg)
     url[i] = '\0';
 
     if (strcasecmp(method, "GET") == 0)
-    {
+    {//对于get方法，如果有携带参数，query_string指向url中 ? 后面的参数
         query_string = url;
         while ((*query_string != '?') && (*query_string != '\0'))
             query_string++;
         if (*query_string == '?')
         {
             cgi = 1;
-            *query_string = '\0';
+            *query_string = '\0';//这里帮忙切断了url?后面的参数列表
             query_string++;
         }
     }
 
+    //拼接返回文件的路径，"/"默认返回index.html
     sprintf(path, "htdocs%s", url);
     if (path[strlen(path) - 1] == '/')
         strcat(path, "index.html");
-    if (stat(path, &st) == -1) {
+
+    if (stat(path, &st) == -1) {//文件路径非法
         while ((numchars > 0) && strcmp("\n", buf))  /* read & discard headers */
             numchars = get_line(client, buf, sizeof(buf));
         not_found(client);
     }
-    else
+    else    //文件路径合法
     {
         if ((st.st_mode & S_IFMT) == S_IFDIR)
             strcat(path, "/index.html");
@@ -130,6 +146,7 @@ void accept_request(void *arg)
             execute_cgi(client, path, method, query_string);
     }
 
+    //HTTP是无连接的，直接关闭即可
     close(client);
 }
 
@@ -221,11 +238,12 @@ void execute_cgi(int client, const char *path,
     int content_length = -1;
 
     buf[0] = 'A'; buf[1] = '\0';
-    if (strcasecmp(method, "GET") == 0)
+    //把请求体丢掉
+    if (strcasecmp(method, "GET") == 0)/* GET */
         while ((numchars > 0) && strcmp("\n", buf))  /* read & discard headers */
             numchars = get_line(client, buf, sizeof(buf));
     else if (strcasecmp(method, "POST") == 0) /*POST*/
-    {
+    {   //POST处理只接受Content-Length,其他请求体丢弃
         numchars = get_line(client, buf, sizeof(buf));
         while ((numchars > 0) && strcmp("\n", buf))
         {
@@ -259,17 +277,23 @@ void execute_cgi(int client, const char *path,
     }
     sprintf(buf, "HTTP/1.0 200 OK\r\n");
     send(client, buf, strlen(buf), 0);
-    if (pid == 0)  /* child: CGI script */
+    if (pid == 0)  /* child: CGI script */ //子进程
     {
         char meth_env[255];
         char query_env[255];
         char length_env[255];
 
-        dup2(cgi_output[1], STDOUT);
-        dup2(cgi_input[0], STDIN);
-        close(cgi_output[0]);
-        close(cgi_input[1]);
+        dup2(cgi_output[1], STDOUT);//把STDOUT重定向到cgi_output的写入端
+        dup2(cgi_input[0], STDIN);  //把STDIN重定向到cgi_input的读取端
+        close(cgi_output[0]);//关闭cgi_output的读取端（从2个指向变成了1）
+        close(cgi_input[1]);//关闭cgi_input的写入端
+        //上面4句话的意思是cgi_output不能被其他调用读取，他只负责从终端 输出 中写入缓存
+        //cgi_input是不能被写进，只负责从终端 输入 中写入缓存
+        //CGI读数据是从标准输入stdin，写数据是写到标准输出stdout
         sprintf(meth_env, "REQUEST_METHOD=%s", method);
+
+
+        //这几个putenv是做全局给CGI程序的，直到execl执行CGI程序之前
         putenv(meth_env);
         if (strcasecmp(method, "GET") == 0) {
             sprintf(query_env, "QUERY_STRING=%s", query_string);
@@ -281,20 +305,20 @@ void execute_cgi(int client, const char *path,
         }
         execl(path, NULL);
         exit(0);
-    } else {    /* parent */
-        close(cgi_output[1]);
-        close(cgi_input[0]);
+    } else {    /* parent */  //父进程
+        close(cgi_output[1]);   //关闭cgi_output的写入端
+        close(cgi_input[0]);    //关闭cgi_input的读取端
         if (strcasecmp(method, "POST") == 0)
             for (i = 0; i < content_length; i++) {
                 recv(client, &c, 1, 0);
-                write(cgi_input[1], &c, 1);
+                write(cgi_input[1], &c, 1);//这里最主要是通过管道和子进程交换数据
             }
         while (read(cgi_output[0], &c, 1) > 0)
             send(client, &c, 1, 0);
 
         close(cgi_output[0]);
         close(cgi_input[1]);
-        waitpid(pid, &status, 0);
+        waitpid(pid, &status, 0);//等待子进程结束
     }
 }
 
@@ -307,8 +331,8 @@ void execute_cgi(int client, const char *path,
  * string will be a linefeed and the string will be terminated with a
  * null character.
  * Parameters: the socket descriptor
- *             the buffer to save the data in
- *             the size of the buffer
+ *             the buffer to save the data in   
+ *             the size of the buffer   in
  * Returns: the number of bytes stored (excluding null) */
 /**********************************************************************/
 int get_line(int sock, char *buf, int size)
@@ -319,13 +343,15 @@ int get_line(int sock, char *buf, int size)
 
     while ((i < size - 1) && (c != '\n'))
     {
-        n = recv(sock, &c, 1, 0);
+        n = recv(sock, &c, 1, 0);//逐字节读取
         /* DEBUG printf("%02X\n", c); */
         if (n > 0)
         {
             if (c == '\r')
             {
-                n = recv(sock, &c, 1, MSG_PEEK);
+                //MSG_PEEK参数把数据从socket队列中的可读数据拷贝到缓存中，而socket队列的数据不会减少
+                //可以理解为探路标识符
+                n = recv(sock, &c, 1, MSG_PEEK); 
                 /* DEBUG printf("%02X\n", c); */
                 if ((n > 0) && (c == '\n'))
                     recv(sock, &c, 1, 0);
@@ -412,8 +438,8 @@ void serve_file(int client, const char *filename)
         not_found(client);
     else
     {
-        headers(client, filename);
-        cat(client, resource);
+        headers(client, filename);  //HTTP请求头+HTTP请求体
+        cat(client, resource);      //追加请求数据
     }
     fclose(resource);
 }
@@ -440,7 +466,7 @@ int startup(u_short *port)
     name.sin_port = htons(*port);
     name.sin_addr.s_addr = htonl(INADDR_ANY);
     if ((setsockopt(httpd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on))) < 0)  
-    {  
+    {  //setsockopt：设置httpd socket可复用
         error_die("setsockopt failed");
     }
     if (bind(httpd, (struct sockaddr *)&name, sizeof(name)) < 0)
@@ -450,7 +476,8 @@ int startup(u_short *port)
         socklen_t namelen = sizeof(name);
         if (getsockname(httpd, (struct sockaddr *)&name, &namelen) == -1)
             error_die("getsockname");
-        *port = ntohs(name.sin_port);
+            //getsockname 向addr返回sockfd所绑定的地址,addlen初始化为addr的长度，函数调用完返回实际长度
+        *port = ntohs(name.sin_port);//因为getsockname返回了实际的绑定地址，所以这里可以拿到未设定的port的值
     }
     if (listen(httpd, 5) < 0)
         error_die("listen");
@@ -495,7 +522,7 @@ int main(void)
     socklen_t  client_name_len = sizeof(client_name);
     pthread_t newthread;
 
-    server_sock = startup(&port);
+    server_sock = startup(&port);//返回了serverfd，而且port也是个in_out_arg
     printf("httpd running on port %d\n", port);
 
     while (1)
